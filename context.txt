@@ -25,12 +25,11 @@ KEY DECISIONS MADE:
 
 CURRENT STATUS:
 - Prompt 1 COMPLETE: config.py, preprocessing.py, requirements.txt, README.md
-- Issue encountered: src/ folder missing, __init__.py missing, import path errors
-- Fixed: Need to create src/ folder and move files properly
+- Prompt 2 COMPLETE: Core Engine (embeddings.py, features.py, synthetic_labels.py, ranker.py)
+- Fixed: Resolved SyntaxError in ranker.py imports, KeyError in synthetic_labels.py for job description field mapping, and slicing mismatch in test.py. Core pipeline (FAISS index, feature extraction, XGBoost training/prediction) is fully functional and tested.
 
 NEXT STEP:
-- Prompt 2: Core Engine (embeddings.py, features.py, synthetic_labels.py, ranker.py)
-- Need to test FAISS index building, feature extraction, XGBoost training
+- Prompt 3: LLM Layer (re_ranker.py using GROQ llama-3.1-8b-instant, JSON output)
 
 TECH STACK:
 - Python 3.9+, sentence-transformers, faiss-cpu, xgboost, pandas, groq
