@@ -1,0 +1,66 @@
+# Redrob Hackathon — Submission Metadata
+# Mirrors portal metadata fields for verification during stage 3 review.
+
+# ============================================================================
+# Team identity
+# ============================================================================
+team_name: "Smarpit - AI Ranker"
+
+primary_contact:
+  name: "Smarpit"
+  email: "smarpitmalik@gmail.com"
+  phone: "+91-9876543210"
+
+team_members:
+  - name: "Smarpit"
+    email: "smarpitmalik@gmail.com"
+    role: "ML Engineer"
+
+# ============================================================================
+# Code and reproducibility
+# ============================================================================
+github_repo: "https://github.com/smarpitm/Hack2skill"
+
+sandbox_link: "https://huggingface.co/spaces/smarpitm/redrob-ranker"
+
+reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+
+# ============================================================================
+# Compute environment
+# ============================================================================
+compute:
+  platform: "Local Windows PC"
+  cpu_cores: 16
+  ram_gb: 16
+  python_version: "3.13.13"
+  os: "Windows 11"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: false
+  pre_computation_time_minutes: 0
+
+# ============================================================================
+# AI tools declaration
+# ============================================================================
+ai_tools_used:
+  - "Claude"
+  - "Cursor"
+
+ai_usage_summary: |
+  Used Cursor and Claude for refactoring python scripts, improving error handling, implementing fallbacks, and structuring unit tests. No candidate data was fed to external APIs during execution.
+
+# ============================================================================
+# Approach summary (optional but recommended)
+# ============================================================================
+methodology_summary: |
+  A robust 3-Stage Hybrid Pipeline consisting of (1) Sentence-BERT + FAISS dense retrieval for fast candidates filtering, (2) XGBoost pairwise ranker trained on 15 custom text and metadata features with a tier-2/3 activity bonus, and (3) Groq LLaMA 3.1 8B LLM re-ranker. Implements robust fallbacks at all stages and handles Hinglish education degrees and Indian IT hubs natively.
+
+# ============================================================================
+# Declarations
+# ============================================================================
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true

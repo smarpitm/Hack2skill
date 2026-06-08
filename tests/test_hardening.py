@@ -120,3 +120,91 @@ class TestRobustSectionDetection:
         assert sections["education"] is True
         assert sections["skills"] is True
         assert sections["projects"] is True
+
+
+class TestCandidateDataLoading:
+    """Tests for loading candidates from various formats (CSV, JSON, JSONL, JSONL.GZ)."""
+
+    @pytest.fixture
+    def mock_candidate_dict(self):
+        return {
+            "candidate_id": "CAND_0000001",
+            "profile": {
+                "anonymized_name": "Test Candidate",
+                "headline": "Software Engineer",
+                "summary": "Experienced engineer.",
+                "location": "Pune",
+                "country": "India",
+                "years_of_experience": 5.0,
+                "current_title": "Software Engineer",
+                "current_company": "TCS"
+            },
+            "skills": [
+                {"name": "Python", "proficiency": "expert", "endorsements": 10, "duration_months": 36},
+                {"name": "SQL", "proficiency": "intermediate", "endorsements": 5, "duration_months": 24}
+            ],
+            "education": [
+                {"degree": "B.Tech", "institution": "IIT Bombay", "field_of_study": "CS", "start_year": 2015, "end_year": 2019, "tier": "tier_1"}
+            ],
+            "career_history": [
+                {"company": "TCS", "title": "Software Engineer", "start_date": "2019-06-01", "end_date": None, "duration_months": 48, "is_current": True, "industry": "IT", "company_size": "10001+", "description": "Developed web applications."}
+            ],
+            "redrob_signals": {
+                "profile_completeness_score": 90.0,
+                "signup_date": "2019-01-01",
+                "last_active_date": "2026-06-01",
+                "open_to_work_flag": True,
+                "profile_views_received_30d": 12,
+                "applications_submitted_30d": 3,
+                "recruiter_response_rate": 0.8,
+                "avg_response_time_hours": 4.0,
+                "skill_assessment_scores": {"Python": 85.0},
+                "connection_count": 120,
+                "endorsements_received": 15,
+                "notice_period_days": 30,
+                "expected_salary_range_inr_lpa": {"min": 15.0, "max": 25.0},
+                "preferred_work_mode": "hybrid",
+                "willing_to_relocate": True,
+                "github_activity_score": 75.0,
+                "search_appearance_30d": 45,
+                "saved_by_recruiters_30d": 5,
+                "interview_completion_rate": 0.9,
+                "offer_acceptance_rate": 0.8,
+                "verified_email": True,
+                "verified_phone": True,
+                "linkedin_connected": True
+            }
+        }
+
+    def test_json_loading(self, tmp_path, mock_candidate_dict):
+        import json
+        from src.pipeline import CandidateRankingPipeline
+
+        json_file = tmp_path / "candidates.json"
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump([mock_candidate_dict], f)
+
+        pipeline = CandidateRankingPipeline()
+        df = pipeline.load_candidates_dataframe(str(json_file))
+        assert len(df) == 1
+        assert df.iloc[0]["candidate_id"] == "CAND_0000001"
+        assert "Python" in df.iloc[0]["skills"]
+        assert df.iloc[0]["experience_years"] == 5.0
+        assert df.iloc[0]["is_honeypot"] == 0
+
+    def test_jsonl_gz_loading(self, tmp_path, mock_candidate_dict):
+        import json
+        import gzip
+        from src.pipeline import CandidateRankingPipeline
+
+        gz_file = tmp_path / "candidates.jsonl.gz"
+        with gzip.open(gz_file, "wt", encoding="utf-8") as f:
+            f.write(json.dumps(mock_candidate_dict) + "\n")
+
+        pipeline = CandidateRankingPipeline()
+        df = pipeline.load_candidates_dataframe(str(gz_file))
+        assert len(df) == 1
+        assert df.iloc[0]["candidate_id"] == "CAND_0000001"
+        assert df.iloc[0]["experience_years"] == 5.0
+        assert df.iloc[0]["is_honeypot"] == 0
+

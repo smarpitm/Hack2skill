@@ -7,6 +7,8 @@ Wires Stage 1 (FAISS dense retrieval) → Stage 2 (XGBoost ranking) → Stage 3 
 
 import logging
 import os
+import gzip
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -70,6 +72,133 @@ class CandidateRankingPipeline:
         self.index_built: bool = False
         self.ranker_trained: bool = False
 
+    def load_candidates_dataframe(self, path: str) -> pd.DataFrame:
+        """
+        Load candidates data from CSV, JSONL, or JSONL.GZ file.
+        Parses and flattens JSON fields to match the expected DataFrame schema.
+        Also supports JSON files containing a list of candidate dicts.
+        """
+        path_obj = Path(path)
+        if not path_obj.exists():
+            raise FileNotFoundError(f"Candidate data file not found at: {path}")
+
+        if path_obj.suffix.lower() == ".csv":
+            logger.info(f"Reading candidates CSV: {path_obj}")
+            return pd.read_csv(str(path_obj))
+
+        logger.info(f"Parsing candidates JSON/JSONL: {path_obj}")
+        
+        # Helper function to detect honeypot candidate on the fly
+        def is_honeypot_candidate(cand_dict):
+            skills = cand_dict.get("skills", [])
+            expert_zero_duration_count = 0
+            for s in skills:
+                prof = str(s.get("proficiency", "")).lower()
+                dur = s.get("duration_months", 0)
+                if prof in ("expert", "advanced") and dur == 0:
+                    expert_zero_duration_count += 1
+                    
+            history = cand_dict.get("career_history", [])
+            recent_startups = {"krutrim", "sarvam ai"}
+            foundation_anomaly = False
+            for job in history:
+                comp = str(job.get("company", "")).lower()
+                start = job.get("start_date")
+                duration = job.get("duration_months", 0)
+                
+                if comp in recent_startups:
+                    if start:
+                        try:
+                            start_year = int(start.split("-")[0])
+                            if start_year < 2023 or duration > 36:
+                                foundation_anomaly = True
+                        except Exception:
+                            continue
+            return expert_zero_duration_count >= 3 or foundation_anomaly
+
+        records = []
+        candidates_list = None
+
+        # Read JSON file directly if it's a JSON array
+        if path_obj.suffix.lower() == ".json":
+            with open(str(path_obj), "r", encoding="utf-8") as f:
+                candidates_list = json.load(f)
+                if isinstance(candidates_list, dict):
+                    candidates_list = [candidates_list]
+
+        if candidates_list is None:
+            # Read JSONL or JSONL.GZ line-by-line
+            is_gz = path_obj.suffix.lower() == ".gz" or path_obj.name.lower().endswith(".jsonl.gz")
+            open_func = gzip.open if is_gz else open
+            mode = "rt" if is_gz else "r"
+            candidates_list = []
+            with open_func(str(path_obj), mode, encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    candidates_list.append(json.loads(line))
+
+        for cand in candidates_list:
+            profile = cand.get("profile", {})
+            candidate_id = cand.get("candidate_id")
+            headline = profile.get("headline", "")
+            summary = profile.get("summary", "")
+            location = profile.get("location", "")
+            country = profile.get("country", "")
+            years_exp = profile.get("years_of_experience", 0.0)
+            current_title = profile.get("current_title", "")
+            current_company = profile.get("current_company", "")
+            
+            skill_list = [s.get("name", "") for s in cand.get("skills", [])]
+            skills_str = ", ".join(skill_list)
+            
+            edu_list = cand.get("education", [])
+            edu_parts = []
+            for edu in edu_list:
+                edu_parts.append(f"{edu.get('degree', '')} from {edu.get('institution', '')} (tier: {edu.get('tier', 'unknown')})")
+            edu_str = "; ".join(edu_parts) if edu_parts else "None"
+            
+            # Recreate resume_text matching clean_dataset.py exactly
+            resume_parts = [
+                f"Name: {profile.get('anonymized_name', '')}",
+                f"Headline: {headline}",
+                f"Summary: {summary}",
+                f"Current Position: {current_title} at {current_company}",
+                f"Location: {location}, {country}",
+                f"Education: {edu_str}"
+            ]
+            
+            history_parts = []
+            for job in cand.get("career_history", []):
+                history_parts.append(
+                    f"Role: {job.get('title', '')} at {job.get('company', '')} "
+                    f"({job.get('duration_months', 0)} months). Description: {job.get('description', '')}"
+                )
+            if history_parts:
+                resume_parts.append("Work History: " + "; ".join(history_parts))
+                
+            resume_text = " | ".join(resume_parts)
+            
+            signals = cand.get("redrob_signals", {})
+            platform_activity = signals.get("profile_completeness_score", 0.0)
+            
+            is_hp = 1 if is_honeypot_candidate(cand) else 0
+            
+            records.append({
+                "candidate_id": candidate_id,
+                "resume_text": resume_text,
+                "skills": skills_str,
+                "experience_years": years_exp,
+                "education": edu_str,
+                "location": location,
+                "current_title": current_title,
+                "platform_activity_score": platform_activity,
+                "is_honeypot": is_hp
+            })
+            
+        logger.info(f"Successfully loaded {len(records)} candidates from JSON/JSONL.")
+        return pd.DataFrame(records)
+
     # ------------------------------------------------------------------
     # STAGE 1: Build / Load FAISS Index
     # ------------------------------------------------------------------
@@ -98,9 +227,10 @@ class CandidateRankingPipeline:
 
         candidates_path = candidates_path or _DEFAULT_CANDIDATES_FILE
         logger.info(f"Loading candidates from: {candidates_path}")
-        candidates_df = pd.read_csv(candidates_path)
+        candidates_df = self.load_candidates_dataframe(candidates_path)
 
         # If a saved index exists and we are not forcing rebuild, load it from disk
+        loaded_index = False
         if (
             not force_rebuild
             and _FAISS_INDEX_PATH.exists()
@@ -110,8 +240,18 @@ class CandidateRankingPipeline:
             faiss_index, candidate_ids = embeddings.load_faiss_index(
                 str(_FAISS_INDEX_PATH), str(_FAISS_IDS_PATH)
             )
-            embedder = SentenceTransformer(self._cfg.EMBEDDING_MODEL)
-        else:
+            
+            # Verify if index matches the loaded candidate DataFrame
+            df_ids = set(candidates_df[id_column].astype(str))
+            idx_ids = set(candidate_ids.astype(str))
+            if df_ids == idx_ids:
+                embedder = SentenceTransformer(self._cfg.EMBEDDING_MODEL)
+                loaded_index = True
+                logger.info("Existing FAISS index matches current candidate pool. Reusing index.")
+            else:
+                logger.info("Existing FAISS index candidate IDs do not match the current candidate pool. Rebuilding...")
+
+        if not loaded_index:
             logger.info("Building new FAISS index...")
             self._cfg.MODELS_DIR.mkdir(parents=True, exist_ok=True)
             faiss_index, candidate_ids, embedder = embeddings.build_index_from_dataframe(
@@ -166,7 +306,7 @@ class CandidateRankingPipeline:
         if not _SYNTHETIC_DATA_PATH.exists():
             logger.info("Synthetic training data not found. Generating...")
             jobs_df = pd.read_csv(str(_DEFAULT_JOBS_FILE))
-            candidates_df = pd.read_csv(str(_DEFAULT_CANDIDATES_FILE))
+            candidates_df = self.load_candidates_dataframe(str(_DEFAULT_CANDIDATES_FILE))
             synthetic_df = synthetic_labels.generate_synthetic_labels(jobs_df, candidates_df)
             synthetic_labels.save_synthetic_data(synthetic_df, str(_SYNTHETIC_DATA_PATH))
         else:
@@ -408,7 +548,7 @@ class CandidateRankingPipeline:
         jobs_df = pd.read_csv(str(jobs_path))
 
         logger.info(f"Loading candidates from: {candidates_path}")
-        candidates_df = pd.read_csv(str(candidates_path))
+        candidates_df = self.load_candidates_dataframe(str(candidates_path))
 
         # Ensure index is built
         if not self.index_built:

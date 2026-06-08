@@ -80,12 +80,24 @@ def encode_texts(
         
     try:
         model = SentenceTransformer(model_name)
-        embeddings = model.encode(
-            texts, 
-            batch_size=batch_size, 
-            show_progress_bar=show_progress, 
-            convert_to_numpy=True
-        )
+        if len(texts) >= 10000:
+            logger.info("Using multi-process CPU pool to accelerate encoding of 10k+ candidates...")
+            pool = model.start_multi_process_pool()
+            embeddings = model.encode(
+                texts, 
+                batch_size=batch_size, 
+                show_progress_bar=show_progress, 
+                convert_to_numpy=True,
+                pool=pool
+            )
+            model.stop_multi_process_pool(pool)
+        else:
+            embeddings = model.encode(
+                texts, 
+                batch_size=batch_size, 
+                show_progress_bar=show_progress, 
+                convert_to_numpy=True
+            )
         return np.array(embeddings, dtype=np.float32)
     except Exception as e:
         logger.error(f"Error during SentenceTransformer encoding: {str(e)}")

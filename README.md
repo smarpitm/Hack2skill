@@ -55,9 +55,9 @@ pip install -r requirements.txt
 
 ## One-Command Run
 
-Run the entire pipeline on your input data:
+Run the entire pipeline on your input candidate pool:
 ```bash
-python run.py --data_path ./data --output submission.csv
+python rank.py --candidates ./candidates.jsonl --out ./submission.csv
 ```
 
 ---
