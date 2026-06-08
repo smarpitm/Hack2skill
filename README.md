@@ -82,10 +82,13 @@ The pipeline expects two files in the input directory (`./data`):
 
 ### Expected Output Format
 
-The output file **`submission.csv`** contains the final sorted ranks:
-- `job_id`: The identifier of the job query.
-- `candidate_id`: The identifier of the ranked candidate.
-- `rank`: Rank number from 1 to 20 (where 1 is the best-fit candidate).
+The output file **`<registered_participant_id>.csv`** (e.g. `team_xxx.csv` or `submission.csv`) must contain the final sorted ranks in exactly 100 data rows:
+- `candidate_id`: The identifier of the ranked candidate (matching `CAND_XXXXXXX` format).
+- `rank`: Contiguous rank number from 1 to 100 (where 1 is the best-fit candidate).
+- `score`: Monotonically non-increasing similarity score (float).
+- `reasoning`: A text reason summarizing the candidate suitability.
+
+The CSV must contain exactly 100 data rows following a 1-row header.
 
 ---
 

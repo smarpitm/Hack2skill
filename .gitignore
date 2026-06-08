@@ -95,3 +95,14 @@ submissions/*.csv
 *.DS_Store
 Thumbs.db
 desktop.ini
+
+data/
+[PUB]*/
+*.jsonl
+*.csv
+*.faiss
+*.npy
+models/
+cache/
+submissions/
+

@@ -15,15 +15,15 @@ load_dotenv()
 # ==============================================================================
 # PATHS
 # ==============================================================================
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = os.path.join(str(BASE_DIR), "data")
-MODELS_DIR = os.path.join(str(BASE_DIR), "models")
-CACHE_DIR = os.path.join(str(BASE_DIR), "cache")
-SUBMISSIONS_DIR = os.path.join(str(BASE_DIR), "submissions")
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+MODELS_DIR = BASE_DIR / "models"
+CACHE_DIR = BASE_DIR / "src" / "cache"
+SUBMISSIONS_DIR = BASE_DIR / "submissions"
 
 # Create directories if they do not exist
 for path in [DATA_DIR, MODELS_DIR, CACHE_DIR, SUBMISSIONS_DIR]:
-    os.makedirs(path, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True)
 
 # ==============================================================================
 # MODEL NAMES
@@ -120,6 +120,7 @@ EDUCATION_EQUIVALENCE_MAP = {
     "phd": 5, 
     "ph.d": 5, 
     "doctorate": 5,
+    "पीएचडी": 5,
     "masters": 4, 
     "m.tech": 4, 
     "mca": 4, 
@@ -127,6 +128,11 @@ EDUCATION_EQUIVALENCE_MAP = {
     "m.s": 4, 
     "m.sc": 4, 
     "m.e": 4,
+    "pgdm": 4,
+    "m.com": 4,
+    "m.a": 4,
+    "एमटेक": 4,
+    "एमसीए": 4,
     "bachelors": 3, 
     "b.tech": 3, 
     "b.e": 3, 
@@ -134,11 +140,21 @@ EDUCATION_EQUIVALENCE_MAP = {
     "b.sc": 3, 
     "b.com": 3, 
     "b.a": 3,
+    "bba": 3,
+    "बीटेक": 3,
+    "बीई": 3,
     "diploma": 2, 
     "polytechnic": 2,
+    "डिप्लोमा": 2,
     "high school": 1, 
     "12th": 1, 
-    "hsc": 1
+    "hsc": 1,
+    "ssc": 1,
+    "10th": 1,
+    "cbse": 1,
+    "icse": 1,
+    "intermediate": 1,
+    "matriculation": 1
 }
 
 # ==============================================================================
@@ -169,7 +185,20 @@ LOCATION_NORMALIZATION_MAP = {
     "kochi": "kochi", 
     "cochin": "kochi",
     "thiruvananthapuram": "thiruvananthapuram", 
-    "trivandrum": "thiruvananthapuram"
+    "trivandrum": "thiruvananthapuram",
+    "coimbatore": "coimbatore",
+    "visakhapatnam": "visakhapatnam",
+    "vizag": "visakhapatnam",
+    "chandigarh": "chandigarh",
+    "mohali": "chandigarh",
+    "gandhinagar": "gandhinagar",
+    "vadodara": "vadodara",
+    "baroda": "vadodara",
+    "nagpur": "nagpur",
+    "lucknow": "lucknow",
+    "bhubaneswar": "bhubaneswar",
+    "ghaziabad": "ghaziabad",
+    "faridabad": "faridabad"
 }
 
 # ==============================================================================

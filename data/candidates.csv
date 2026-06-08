@@ -1,4 +1,0 @@
-candidate_id,resume_text,skills,experience_years,education,location
-CAND_001,Python developer with 5 years experience in Django and AWS,"Python, Django, AWS",5,B.Tech,Bangalore
-CAND_002,Java backend engineer with 3 years in Spring Boot,"Java, Spring Boot",3,B.E.,Delhi
-CAND_003,"Full stack developer with React, Node.js, and MongoDB","React, Node.js, MongoDB",4,MCA,Bangalore

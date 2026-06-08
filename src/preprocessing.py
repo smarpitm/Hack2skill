@@ -38,8 +38,9 @@ def clean_text(text: str) -> str:
     text_str = re.sub(r'\bc\#(?!\w)', 'csharp', text_str)
     text_str = re.sub(r'(?<!\w)\.net\b', 'dotnet', text_str)
     
-    # Remove special characters except alphanumeric and spaces
-    text_str = re.sub(r'[^a-z0-9\s]', ' ', text_str)
+    # Keep alphanumeric (including unicode letters) and whitespace, replace underscore with space
+    text_str = re.sub(r'[^\w\s]', ' ', text_str)
+    text_str = re.sub(r'_', ' ', text_str)
     
     # Normalize whitespace (multiple spaces -> single space)
     text_str = re.sub(r'\s+', ' ', text_str).strip()
@@ -147,9 +148,10 @@ def extract_experience_years(text: str) -> float:
     
     # Define regex patterns supporting integers and decimals
     patterns = [
-        r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of\s*)?experience',
-        r'experience\s*:?\s*(\d+(?:\.\d+)?)\+?\s*years?',
-        r'(\d+(?:\.\d+)?)\s*years?\s*(?:in\s*)?(?:industry|field|work|domain)'
+        r'(\d+(?:\.\d+)?)\+?\s*years?\+?\s*(?:of\s*)?experience',
+        r'experience\s*:?\s*(\d+(?:\.\d+)?)\+?\s*years?\+?',
+        r'(\d+(?:\.\d+)?)\s*years?\+?\s*(?:in\s*)?(?:industry|field|work|domain|software|development)?',
+        r'(?:over|more than|at least)\s*(\d+(?:\.\d+)?)\s*years?'
     ]
     
     years_found = []
@@ -159,7 +161,7 @@ def extract_experience_years(text: str) -> float:
             try:
                 years_found.append(float(m))
             except ValueError:
-                pass
+                continue
                 
     if years_found:
         return max(years_found)
@@ -219,6 +221,7 @@ def normalize_education(edu_text: str) -> Tuple[int, str, int]:
         "phd": r'\bph\.?\s*d\b|\bphd\b',
         "ph.d": r'\bph\.?\s*d\b|\bphd\b',
         "doctorate": r'\bdoctorate\b',
+        "पीएचडी": r'पीएचडी',
         "masters": r'\bmasters?\b',
         "m.tech": r'\bm\.?\s*tech\b',
         "mca": r'\bmca\b',
@@ -226,6 +229,11 @@ def normalize_education(edu_text: str) -> Tuple[int, str, int]:
         "m.s": r'\bm\.?\s*s\b',
         "m.sc": r'\bm\.?\s*sc\b',
         "m.e": r'\bm\.?\s*e\b',
+        "pgdm": r'\bpgdm\b',
+        "m.com": r'\bm\.?\s*com\b',
+        "m.a": r'\bm\.?\s*a\b',
+        "एमटेक": r'एमटेक',
+        "एमसीए": r'एमसीए',
         "bachelors": r'\bbachelors?\b',
         "b.tech": r'\bb\.?\s*tech\b',
         "b.e": r'\bb\.?\s*e\b',
@@ -233,11 +241,21 @@ def normalize_education(edu_text: str) -> Tuple[int, str, int]:
         "b.sc": r'\bb\.?\s*sc\b',
         "b.com": r'\bb\.?\s*com\b',
         "b.a": r'\bb\.?\s*a\b',
+        "bba": r'\bbba\b',
+        "बीटेक": r'बीटेक',
+        "बीई": r'बीई',
         "diploma": r'\bdiploma\b',
         "polytechnic": r'\bpolytechnic\b',
+        "डिप्लोमा": r'डिप्लोमा',
         "high school": r'\bhigh\s*school\b',
         "12th": r'\b12th\b',
-        "hsc": r'\bhsc\b'
+        "hsc": r'\bhsc\b',
+        "ssc": r'\bssc\b',
+        "10th": r'\b10th\b',
+        "cbse": r'\bcbse\b',
+        "icse": r'\bicse\b',
+        "intermediate": r'\bintermediate\b',
+        "matriculation": r'\bmatriculation\b'
     }
     
     for key, level in config.EDUCATION_EQUIVALENCE_MAP.items():
@@ -312,11 +330,11 @@ def parse_resume_sections(text: str) -> Dict[str, bool]:
     text_lower = str(text).lower()
     
     keywords_map = {
-        "education": ["education", "academic", "qualification", "degree"],
-        "experience": ["experience", "work history", "employment", "career"],
-        "skills": ["skills", "technical skills", "core competencies", "expertise"],
-        "projects": ["projects", "portfolio", "work samples"],
-        "certifications": ["certifications", "certificates", "accreditations"]
+        "education": ["education", "academic", "qualification", "degree", "academics", "qualifications", "degrees"],
+        "experience": ["experience", "experiences", "work history", "employment", "career", "work experience", "professional experience"],
+        "skills": ["skills", "technical skills", "core competencies", "expertise", "technologies", "skillset", "key skills"],
+        "projects": ["projects", "portfolio", "work samples", "key projects", "personal projects"],
+        "certifications": ["certifications", "certificates", "accreditations", "certification", "certificate"]
     }
     
     sections_present = {}

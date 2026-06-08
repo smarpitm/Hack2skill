@@ -14,7 +14,8 @@ import pathlib
 import importlib.util
 from typing import List, Dict, Optional, Any, Union
 import pandas as pd
-from groq import Groq
+import re
+from groq import Groq, RateLimitError, APIError, APIConnectionError, APITimeoutError
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -201,8 +202,6 @@ Example: ["CAND_001", "CAND_045", "CAND_089"]"""
         """
         Parse JSON array of candidate IDs from response text and validate it against expected IDs.
         """
-        import re
-        
         # Clean potential markdown wrappers
         cleaned_text = response_text.strip()
         if cleaned_text.startswith("```"):
@@ -244,8 +243,6 @@ Example: ["CAND_001", "CAND_045", "CAND_089"]"""
         """
         Make the actual chat completion API call to Groq. Handles rate limiting and retries.
         """
-        from groq import RateLimitError, APIError, APIConnectionError, APITimeoutError
-        
         for attempt in range(2):
             try:
                 response = self.client.chat.completions.create(
@@ -280,82 +277,90 @@ Example: ["CAND_001", "CAND_045", "CAND_089"]"""
         """
         Rerank a dataframe of candidates for a job description using GROQ LLM.
         """
-        if candidates_df.empty:
-            logger.warning("Empty candidates DataFrame passed to rerank. Returning empty list.")
-            return []
+        try:
+            if candidates_df.empty:
+                logger.warning("Empty candidates DataFrame passed to rerank. Returning empty list.")
+                return []
+                
+            # Extract candidate IDs and verify presence of required columns
+            required_cols = {"candidate_id", "resume_text", "skills"}
+            for col in required_cols:
+                if col not in candidates_df.columns:
+                    logger.error(f"Missing required column '{col}' in candidates_df.")
+                    return None
+                    
+            # Build summaries and gather expected IDs
+            summaries = []
+            expected_ids = []
+            for _, row in candidates_df.iterrows():
+                summaries.append(create_candidate_summary(row, max_length=200))
+                expected_ids.append(str(row["candidate_id"]))
+                
+            # Build Prompt
+            prompt = self._build_prompt(job_description, summaries)
+            cache_key = self._get_cache_key(prompt)
             
-        # Extract candidate IDs and verify presence of required columns
-        required_cols = {"candidate_id", "resume_text", "skills"}
-        for col in required_cols:
-            if col not in candidates_df.columns:
-                logger.error(f"Missing required column '{col}' in candidates_df.")
+            # Check Cache
+            if cache_key in self.cache:
+                logger.info("Cache hit! Returning cached ranking.")
+                cached_val = self.cache[cache_key]["response"]
+                parsed = self._parse_response(cached_val, expected_ids)
+                if parsed is not None:
+                    return parsed
+                logger.warning("Cached value failed validation. Making fresh API call.")
+                
+            # Cache Miss: Make API call
+            logger.info(f"Cache miss. Calling GROQ API using model {self.model_name}...")
+            response_text = self._call_groq_api(prompt)
+            if response_text is None:
+                logger.error("API call failed. Rerank returning None.")
                 return None
                 
-        # Build summaries and gather expected IDs
-        summaries = []
-        expected_ids = []
-        for _, row in candidates_df.iterrows():
-            summaries.append(create_candidate_summary(row, max_length=200))
-            expected_ids.append(str(row["candidate_id"]))
-            
-        # Build Prompt
-        prompt = self._build_prompt(job_description, summaries)
-        cache_key = self._get_cache_key(prompt)
-        
-        # Check Cache
-        if cache_key in self.cache:
-            logger.info("Cache hit! Returning cached ranking.")
-            cached_val = self.cache[cache_key]["response"]
-            parsed = self._parse_response(cached_val, expected_ids)
-            if parsed is not None:
-                return parsed
-            logger.warning("Cached value failed validation. Making fresh API call.")
-            
-        # Cache Miss: Make API call
-        logger.info(f"Cache miss. Calling GROQ API using model {self.model_name}...")
-        response_text = self._call_groq_api(prompt)
-        if response_text is None:
-            logger.error("API call failed. Rerank returning None.")
+            # Parse and Validate Response
+            ranked_ids = self._parse_response(response_text, expected_ids)
+            if ranked_ids is not None:
+                # Save to Cache
+                self.cache[cache_key] = {
+                    "response": response_text,
+                    "timestamp": time.time()
+                }
+                self._save_cache()
+                logger.info("API call successful, cache updated, and ranking returned.")
+                return ranked_ids
+                
+            logger.error("API response parsing/validation failed.")
             return None
-            
-        # Parse and Validate Response
-        ranked_ids = self._parse_response(response_text, expected_ids)
-        if ranked_ids is not None:
-            # Save to Cache
-            self.cache[cache_key] = {
-                "response": response_text,
-                "timestamp": time.time()
-            }
-            self._save_cache()
-            logger.info("API call successful, cache updated, and ranking returned.")
-            return ranked_ids
-            
-        logger.error("API response parsing/validation failed.")
-        return None
+        except Exception as e:
+            logger.error(f"Unexpected error during reranking: {e}")
+            return None
 
     def batch_rerank(self, jobs_df: pd.DataFrame, ranked_candidates_dict: Dict[str, pd.DataFrame]) -> Dict[str, Optional[list]]:
         """
         Sequentially rerank top candidates across multiple jobs.
         """
-        results = {}
-        for idx, (_, job_row) in enumerate(jobs_df.iterrows()):
-            # Resolve job ID safely
-            job_id = job_row.get("job_id")
-            if not job_id:
-                logger.warning(f"Skipping job row {idx} due to missing 'job_id'.")
-                continue
-            job_id = str(job_id)
-            
-            if job_id not in ranked_candidates_dict:
-                logger.warning(f"No candidate dataframe found in ranked_candidates_dict for job_id '{job_id}'. Skipping.")
-                results[job_id] = None
-                continue
+        try:
+            results = {}
+            for idx, (_, job_row) in enumerate(jobs_df.iterrows()):
+                # Resolve job ID safely
+                job_id = job_row.get("job_id")
+                if not job_id:
+                    logger.warning(f"Skipping job row {idx} due to missing 'job_id'.")
+                    continue
+                job_id = str(job_id)
                 
-            candidates_df = ranked_candidates_dict[job_id]
-            job_desc = job_row.get("description", job_row.get("job_description", ""))
-            
-            logger.info(f"[{idx + 1}/{len(jobs_df)}] Batch reranking for Job ID: {job_id}...")
-            ranked_ids = self.rerank(job_desc, candidates_df)
-            results[job_id] = ranked_ids
-            
-        return results
+                if job_id not in ranked_candidates_dict:
+                    logger.warning(f"No candidate dataframe found in ranked_candidates_dict for job_id '{job_id}'. Skipping.")
+                    results[job_id] = None
+                    continue
+                    
+                candidates_df = ranked_candidates_dict[job_id]
+                job_desc = job_row.get("description", job_row.get("job_description", ""))
+                
+                logger.info(f"[{idx + 1}/{len(jobs_df)}] Batch reranking for Job ID: {job_id}...")
+                ranked_ids = self.rerank(job_desc, candidates_df)
+                results[job_id] = ranked_ids
+                
+            return results
+        except Exception as e:
+            logger.error(f"Unexpected error in batch_rerank: {e}")
+            return {}

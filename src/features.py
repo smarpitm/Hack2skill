@@ -79,7 +79,8 @@ def compute_experience_match(jd_exp_required: float, resume_exp: float) -> float
 def compute_education_match(
     jd_edu_level: int, 
     resume_edu_level: int, 
-    resume_college_tier: int = 0
+    resume_college_tier: int = 0,
+    platform_activity: float = 0.0
 ) -> float:
     """
     Compare education levels and add college tier bonuses.
@@ -88,6 +89,7 @@ def compute_education_match(
         jd_edu_level (int): Required education level (1-5).
         resume_edu_level (int): Candidate's education level (1-5).
         resume_college_tier (int): Candidate's college tier (0=unknown, 1=tier 1, 2=tier 2, 3=others).
+        platform_activity (float): Candidate's platform activity score (0-1).
 
     Returns:
         float: Standardized education score capped at 1.0.
@@ -109,6 +111,10 @@ def compute_education_match(
     elif resume_college_tier == 2:
         bonus = 0.02
         
+    # Tier-2/3 + high platform activity bonus
+    if resume_college_tier in (2, 3) and platform_activity >= 0.8:
+        bonus += 0.05
+        
     return min(base_score + bonus, 1.0)
 
 
@@ -123,6 +129,16 @@ def compute_location_match(jd_location: str, resume_location: str) -> float:
     Returns:
         float: Location match score (0.0 to 1.0).
     """
+    # Outside-India indicators checked on raw text before unknown fallback
+    outside_keywords = [
+        "usa", "uk", "united states", "london", "singapore", "dubai",
+        "canada", "germany", "australia",
+    ]
+    jd_lower = str(jd_location).lower()
+    res_lower = str(resume_location).lower()
+    if any(kw in jd_lower or kw in res_lower for kw in outside_keywords):
+        return 0.0
+
     # Normalize locations
     jd_loc_norm = preprocessing.normalize_location(jd_location)
     res_loc_norm = preprocessing.normalize_location(resume_location)
@@ -143,14 +159,6 @@ def compute_location_match(jd_location: str, resume_location: str) -> float:
     valid_cities = set(config.LOCATION_NORMALIZATION_MAP.values())
     if jd_loc_norm in valid_cities and res_loc_norm in valid_cities:
         return 0.3
-        
-    # Check if either location contains outside India indicators
-    outside_keywords = ["usa", "uk", "united states", "london", "singapore", "dubai", "canada", "germany", "australia"]
-    is_jd_outside = any(kw in str(jd_location).lower() for kw in outside_keywords)
-    is_res_outside = any(kw in str(resume_location).lower() for kw in outside_keywords)
-    
-    if is_jd_outside or is_res_outside:
-        return 0.0
         
     return 0.3
 
@@ -261,6 +269,12 @@ def compute_resume_completeness(candidate_row: Union[pd.Series, Dict[str, Any]])
             if isinstance(val, (list, set, tuple)):
                 if len(val) > 0:
                     filled_count += 1
+            elif field in ("experience_years", "experience"):
+                try:
+                    if float(val) > 0:
+                        filled_count += 1
+                except (ValueError, TypeError):
+                    continue
             elif str(val).strip() != "" and str(val).lower() != "unknown":
                 filled_count += 1
                 
@@ -386,6 +400,51 @@ def compute_current_title_match(jd_title: str, resume_title: str) -> float:
         return 0.6
 
 
+def compute_candidate_experience(candidate_row: Union[pd.Series, Dict[str, Any]]) -> float:
+    """
+    Extract and parse candidate's experience years, with fallback to resume text extraction.
+    """
+    exp = candidate_row.get("experience_years")
+    if exp is None:
+        exp = candidate_row.get("experience", 0.0)
+        
+    resume_text = candidate_row.get("resume_text", "")
+    
+    if isinstance(exp, str):
+        exp = preprocessing.extract_experience_years(exp)
+    
+    try:
+        exp_val = float(exp)
+    except (ValueError, TypeError):
+        exp_val = 0.0
+        
+    if exp_val == 0.0 and resume_text:
+        extracted_exp = preprocessing.extract_experience_years(resume_text)
+        if extracted_exp > 0:
+            exp_val = extracted_exp
+            
+    return exp_val
+
+
+def compute_resume_length(resume_text: str) -> float:
+    """
+    Calculate the length of the resume in words.
+    """
+    if not resume_text or (isinstance(resume_text, float) and resume_text != resume_text):
+        return 0.0
+    return float(len(str(resume_text).split()))
+
+
+def compute_section_completeness(resume_text: str) -> float:
+    """
+    Measure completeness based on presence of key resume sections.
+    """
+    sections_dict = preprocessing.parse_resume_sections(resume_text)
+    if sections_dict:
+        return float(np.mean(list(sections_dict.values())))
+    return 0.0
+
+
 def extract_all_features(
     jd_row: Union[pd.Series, Dict[str, Any]], 
     candidate_row: Union[pd.Series, Dict[str, Any]], 
@@ -418,9 +477,6 @@ def extract_all_features(
     # Candidate Info
     resume_text = candidate_row.get("resume_text", "")
     candidate_skills_raw = candidate_row.get("skills", [])
-    candidate_exp = candidate_row.get("experience_years", 0.0)
-    if candidate_exp is None:
-        candidate_exp = candidate_row.get("experience", 0.0)
     candidate_edu_raw = candidate_row.get("education", "")
     candidate_location = candidate_row.get("location", "")
     candidate_title = candidate_row.get("current_title", "")
@@ -430,11 +486,12 @@ def extract_all_features(
     # Parse exp and titles if raw strings are present instead of pre-parsed values
     if isinstance(jd_exp_req, str):
         jd_exp_req = preprocessing.extract_experience_years(jd_exp_req)
-    if isinstance(candidate_exp, str) or (isinstance(candidate_exp, float) and candidate_exp == 0.0 and resume_text):
-        # Fallback to extract from resume text if not pre-extracted
-        extracted_exp = preprocessing.extract_experience_years(resume_text)
-        if extracted_exp > 0:
-            candidate_exp = extracted_exp
+        
+    # Build dictionary with resume text to pass to compute_candidate_experience
+    candidate_row_parsed = dict(candidate_row)
+    candidate_row_parsed["resume_text"] = resume_text
+    
+    candidate_exp = compute_candidate_experience(candidate_row_parsed)
             
     if not candidate_title or candidate_title == "unknown":
         extracted_title = preprocessing.extract_current_title(resume_text)
@@ -477,40 +534,26 @@ def extract_all_features(
         jd_exp_req = float(jd_exp_req)
     except (ValueError, TypeError):
         jd_exp_req = 0.0
-        
-    try:
-        candidate_exp = float(candidate_exp)
-    except (ValueError, TypeError):
-        candidate_exp = 0.0
 
     # --- 2. COMPUTE FEATURES ---
     skill_count, skill_ratio = compute_skill_match(jd_skills, candidate_skills)
     exp_match = compute_experience_match(jd_exp_req, candidate_exp)
-    edu_match = compute_education_match(jd_edu_level, res_edu_level, res_tier)
+    plat_act = compute_platform_activity(candidate_row)
+    edu_match = compute_education_match(jd_edu_level, res_edu_level, res_tier, plat_act)
     loc_match = compute_location_match(jd_location, candidate_location)
     sem_sim = compute_semantic_similarity(faiss_score)
-    plat_act = compute_platform_activity(candidate_row)
     career_prog = compute_career_progression(candidate_title, candidate_exp)
     
     # Update candidate_row to contain parsed details for completeness check
-    candidate_row_parsed = dict(candidate_row)
-    candidate_row_parsed["resume_text"] = resume_text
     candidate_row_parsed["skills"] = candidate_skills
     candidate_row_parsed["experience_years"] = candidate_exp
     candidate_row_parsed["education"] = candidate_edu_raw
     candidate_row_parsed["current_title"] = candidate_title
     res_complete = compute_resume_completeness(candidate_row_parsed)
     
-    res_len = len(str(resume_text).split()) if resume_text else 0
+    res_len = compute_resume_length(resume_text)
     kw_density = compute_keyword_density(jd_text, resume_text)
-    
-    # Section completeness
-    sections_dict = preprocessing.parse_resume_sections(resume_text)
-    if sections_dict:
-        sec_complete = float(np.mean(list(sections_dict.values())))
-    else:
-        sec_complete = 0.0
-        
+    sec_complete = compute_section_completeness(resume_text)
     proj_div = compute_project_diversity(resume_text)
     title_match = compute_current_title_match(jd_title, candidate_title)
 

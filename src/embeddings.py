@@ -20,6 +20,31 @@ except ImportError:
     faiss = None
     FAISS_AVAILABLE = False
 
+class NumpyFaissFallbackIndex:
+    """
+    Pure NumPy implementation of FAISS IndexFlatIP (Inner Product) search.
+    Used as a graceful fallback when faiss-cpu is not available.
+    """
+    def __init__(self, embeddings: np.ndarray):
+        self.embeddings = embeddings  # shape: (n_candidates, dimension)
+        self.ntotal = len(embeddings)
+
+    def search(self, query_emb: np.ndarray, top_k: int) -> Tuple[np.ndarray, np.ndarray]:
+        # query_emb shape: (1, dimension)
+        # Compute cosine similarity using Inner Product (vectors are normalized)
+        # self.embeddings is shape (n, d), query_emb is (1, d)
+        scores = np.dot(query_emb, self.embeddings.T)  # shape: (1, n)
+        flat_scores = scores[0]
+        
+        top_k = min(top_k, len(flat_scores))
+        if top_k <= 0:
+            return np.empty((1, 0), dtype=np.float32), np.empty((1, 0), dtype=np.int64)
+            
+        # Get indices of top_k elements
+        indices = np.argsort(flat_scores)[::-1][:top_k]
+        
+        return flat_scores[indices].reshape(1, -1), indices.reshape(1, -1)
+
 from . import config
 
 # Setup logging
@@ -84,10 +109,6 @@ def build_faiss_index(
     Returns:
         faiss.Index: The built FAISS IndexFlatIP index.
     """
-    if not FAISS_AVAILABLE:
-        logger.error("FAISS is not installed. Cannot build FAISS index.")
-        raise ImportError("FAISS is required to build dense retrieval index. Please install faiss-cpu.")
-        
     if len(candidate_texts) != len(candidate_ids):
         raise ValueError("Candidate texts and candidate IDs must have the same length.")
         
@@ -98,22 +119,37 @@ def build_faiss_index(
     embeddings = encode_texts(candidate_texts)
     
     # Normalize embeddings for cosine similarity
-    faiss.normalize_L2(embeddings)
+    if FAISS_AVAILABLE:
+        faiss.normalize_L2(embeddings)
+    else:
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        embeddings = embeddings / norms
     
     dimension = embeddings.shape[1]
     
     # Inner Product on normalized vectors is equivalent to Cosine Similarity
-    index = faiss.IndexFlatIP(dimension)
-    index.add(embeddings)
+    if FAISS_AVAILABLE:
+        index = faiss.IndexFlatIP(dimension)
+        index.add(embeddings)
+    else:
+        logger.info("Using NumPy fallback index.")
+        index = NumpyFaissFallbackIndex(embeddings)
     
     if save_path:
         try:
             # Write index to disk
-            faiss.write_index(index, save_path)
-            logger.info(f"FAISS index successfully saved to: {save_path}")
+            if FAISS_AVAILABLE:
+                faiss.write_index(index, save_path)
+                logger.info(f"FAISS index successfully saved to: {save_path}")
+            else:
+                fallback_index_path = save_path + ".fallback.npy"
+                np.save(fallback_index_path, index.embeddings)
+                logger.info(f"Fallback numpy index successfully saved to: {fallback_index_path}")
             
             # Save candidate IDs in the same folder with .ids.npy extension
-            ids_path = save_path.rsplit('.', 1)[0] + ".ids.npy"
+            from pathlib import Path
+            ids_path = str(Path(save_path).with_suffix(".ids.npy"))
             np.save(ids_path, np.array(candidate_ids, dtype=object))
             logger.info(f"Candidate IDs mapped and saved to: {ids_path}")
         except Exception as e:
@@ -134,18 +170,24 @@ def load_faiss_index(index_path: str, ids_path: Optional[str] = None) -> Tuple[A
     Returns:
         Tuple[faiss.Index, np.ndarray]: Loaded FAISS index and the numpy array of candidate IDs.
     """
-    if not FAISS_AVAILABLE:
-        logger.error("FAISS is not installed. Cannot load FAISS index.")
-        raise ImportError("FAISS is required to load dense retrieval index. Please install faiss-cpu.")
-        
-    if not os.path.exists(index_path):
-        raise FileNotFoundError(f"FAISS index file not found at: {index_path}")
-        
-    index = faiss.read_index(index_path)
-    logger.info(f"FAISS index successfully loaded from: {index_path}")
+    from pathlib import Path
+    index_path_obj = Path(index_path)
+    
+    if FAISS_AVAILABLE:
+        if not index_path_obj.exists():
+            raise FileNotFoundError(f"FAISS index file not found at: {index_path}")
+        index = faiss.read_index(str(index_path))
+        logger.info(f"FAISS index successfully loaded from: {index_path}")
+    else:
+        fallback_path = str(index_path_obj) + ".fallback.npy"
+        if not os.path.exists(fallback_path):
+            raise FileNotFoundError(f"Fallback index file not found at: {fallback_path}")
+        embeddings = np.load(fallback_path)
+        index = NumpyFaissFallbackIndex(embeddings)
+        logger.info(f"Fallback index successfully loaded from: {fallback_path}")
     
     if ids_path is None:
-        ids_path = index_path.rsplit('.', 1)[0] + ".ids.npy"
+        ids_path = str(index_path_obj.with_suffix(".ids.npy"))
         
     if not os.path.exists(ids_path):
         raise FileNotFoundError(f"Candidate IDs mapping file not found at: {ids_path}")
@@ -180,10 +222,6 @@ def retrieve_candidates(
             - candidate_indices: 1D numpy array of FAISS internal offsets.
             - matched_candidate_ids: 1D numpy array of the actual candidate IDs.
     """
-    if not FAISS_AVAILABLE:
-        logger.error("FAISS is not installed. Cannot perform retrieval.")
-        raise ImportError("FAISS is required to retrieve candidates. Please install faiss-cpu.")
-        
     if top_k is None:
         top_k = config.RETRIEVAL_K
         
@@ -197,7 +235,12 @@ def retrieve_candidates(
     jd_emb = embedder.encode(jd_text, convert_to_numpy=True).reshape(1, -1).astype(np.float32)
     
     # Normalize for cosine similarity
-    faiss.normalize_L2(jd_emb)
+    if FAISS_AVAILABLE:
+        faiss.normalize_L2(jd_emb)
+    else:
+        norms = np.linalg.norm(jd_emb, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        jd_emb = jd_emb / norms
     
     # Search the index
     scores, indices = faiss_index.search(jd_emb, top_k)
