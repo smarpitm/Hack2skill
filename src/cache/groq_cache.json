@@ -1,0 +1,10 @@
+{
+    "cb99fd51474d6fe6d69071fe791a5489": {
+        "response": "{\n  \"candidates\": [\n      \"CAND_001\",\n      \"CAND_003\",\n      \"CAND_002\"\n   ]\n}",
+        "timestamp": 1780905156.9658399
+    },
+    "431373334a4908bcf521cc135034514d": {
+        "response": "{\n  \"candidates\": [\n      \"CAND_001\",\n      \"CAND_003\",\n      \"CAND_002\"\n   ]\n}",
+        "timestamp": 1780906123.9174454
+    }
+}

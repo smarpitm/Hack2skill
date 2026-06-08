@@ -1,0 +1,97 @@
+# ========================
+# Secrets & Environment
+# ========================
+.env
+.env.*
+*.key
+secrets.json
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ========================
+# Virtual Environments
+# ========================
+venv/
+env/
+.venv/
+ENV/
+
+# ========================
+# Jupyter Notebooks
+# ========================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ========================
+# ML / Model Artifacts
+# ========================
+models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+
+# ========================
+# Data Files (large/raw)
+# ========================
+data/raw/
+data/processed/
+*.parquet
+*.json.gz
+*.npy
+*.npz
+
+# Block all CSVs by default, but allow sample files for judges
+*.csv
+!data/sample_*.csv
+!data/sample_input.csv
+!submissions/sample_output.csv
+
+# ========================
+# Cache
+# ========================
+cache/
+src/cache/
+*.cache
+.cache/
+__pycache__/
+
+# ========================
+# FAISS Indexes
+# ========================
+*.index
+*.faiss
+
+# ========================
+# Logs & Outputs
+# ========================
+logs/
+*.log
+outputs/
+submissions/*.csv
+
+# ========================
+# IDE & OS
+# ========================
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+desktop.ini
