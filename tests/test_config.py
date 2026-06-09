@@ -109,18 +109,6 @@ class TestCollegeTiers:
         assert len(overlap) == 0, f"Overlapping tier keywords: {overlap}"
 
 
-class TestGroqSettings:
-    """GROQ API settings sanity."""
-
-    def test_temperature_low(self):
-        """For ranking, temperature should be low for deterministic output."""
-        assert config.GROQ_TEMPERATURE <= 0.5
-
-    def test_max_tokens_reasonable(self):
-        assert config.GROQ_MAX_TOKENS >= 256
-
-    def test_delay_positive(self):
-        assert config.GROQ_DELAY_SECONDS > 0
 
 
 class TestDefaults:

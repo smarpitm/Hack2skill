@@ -6,55 +6,34 @@ Prize: 10 Lakhs
 Timeline: 42-day virtual hackathon
 
 ARCHITECTURE DECIDED:
-- 3-Stage Hybrid Pipeline
+- 2-Stage Local Retrieval and Ranking Pipeline
   Stage 1: Sentence-BERT + FAISS (dense retrieval, Top-200)
-  Stage 2: XGBoost ranker (15 features, synthetic labels, Top-50)
-  Stage 3: GROQ LLM re-ranker (llama-3.1-8b-instant, Top-20, JSON output)
+  Stage 2: XGBoost ranker (15 features, synthetic labels, Top-100) + Rule-based Reasoning
 
 CONSTRAINTS:
 - ZERO paid APIs in core pipeline
-- GROQ free tier only for optional Stage 3
-- Everything else runs locally
+- Zero network calls / GROQ removed to guarantee local CPU execution
+- Everything runs locally
 - No website needed — submission is code + documentation + CSV
 
 KEY DECISIONS MADE:
 - Using agentic AI (Cursor/Claude) with chunked prompts
 - context.txt as bridge file for every prompt
-- 6-prompt sequence: Foundation → Core Engine → LLM Layer → Orchestration → Review → Testing
-- Project structure: src/ folder with __init__.py, config.py, preprocessing.py, etc.
+- Project structure: src/ folder with __init__.py, config.py, preprocessing.py, data_loader.py, job_description.py, reasoning_generator.py etc.
 
 CURRENT STATUS:
-- Prompt 1 COMPLETE: config.py, preprocessing.py, requirements.txt, README.md
-- Prompt 2 COMPLETE: Core Engine (embeddings.py, features.py, synthetic_labels.py, ranker.py)
-  └─ Fixed: SyntaxError in ranker.py, KeyError in synthetic_labels.py, slicing mismatch in test.py
-  └─ Core pipeline (FAISS index, feature extraction, XGBoost training/prediction) fully tested ✅
-- Prompt 3 COMPLETE: LLM Layer (src/llm_reranker.py)
-  └─ GroqReranker class with MD5 disk-caching (src/cache/groq_cache.json)
-  └─ Retry logic, strict JSON prompt, graceful failure (returns None on error)
-  └─ Standalone helpers: create_candidate_summary(), validate_ranking()
-  └─ GROQ API key loaded from .env via python-dotenv (never hardcoded)
-  └─ End-to-end tested: reranker.rerank() returns ['CAND_001', 'CAND_003', 'CAND_002'] ✅
-- Repository hygiene COMPLETE:
-  └─ .env added to .gitignore (API keys protected)
-  └─ Comprehensive .gitignore created (Python, venv, ML models, data, cache, logs, IDE)
-  └─ Sample CSV exception: data/sample_*.csv allowed for judges
-
-- Prompt 4 COMPLETE: Orchestration (run.py, src/pipeline.py)
-  └─ Integrated Stage 1 → Stage 2 → Stage 3
-  └─ Handles directory paths, model loading/training, end-to-end ranking
-  └─ Completed validation check showing correct columns (job_id, candidate_id, rank)
-  └─ Verified run without LLM (fastest test) successfully ✅
-
-- Prompt 6 COMPLETE: Unit Testing (tests/ suite, pytest.ini, conftest.py)
-  └─ 244 tests across config, preprocessing, features, ranker, synthetic_labels, llm_reranker, pipeline
-  └─ Fixed: outside-India location match (0.0 not 0.5), empty resume completeness (0.0 not 0.2)
-  └─ All 244 tests passing ✅
-
-NEXT STEP:
-- Prompt 5: Review & Polish (error handling, logging, edge cases, validation, documentation)
+- Core Pipeline Refactoring COMPLETE:
+  └─ Config optimized for local execution (removed GROQ settings)
+  └─ Added src/data_loader.py and src/job_description.py to modularize loading
+  └─ Modified src/features.py to calculate exactly 15 features including honeypot checks/penalties
+  └─ Modified src/pipeline.py to process single-job locally, enforce deterministic candidate_id ascending tie-breaker, and generate reasoning using reasoning_generator.py
+- Removed LLM reranker completely (deleted src/llm_reranker.py, removed groq from requirements.txt)
+- Added tests/test_e2e.py to perform end-to-end simulation (collects 220 unit tests)
+- All 220 tests passing successfully ✅
+- Validated on sample candidates pool, conforming strictly to validate_submission.py checks ✅
 
 TECH STACK:
-- Python 3.9+, sentence-transformers, faiss-cpu, xgboost, pandas, groq, python-dotenv
+- Python 3.9+, sentence-transformers, faiss-cpu, xgboost, pandas, python-dotenv
 - Virtual environment: venv/ in project root
 - Environment: Windows / PowerShell
 
@@ -64,21 +43,20 @@ INDIAN CONTEXT RULES:
 - Location normalization for Indian cities
 
 PROJECT FILES (src/):
-- config.py          → All constants, paths, load_dotenv()
+- config.py          → All constants, paths
 - preprocessing.py   → Text cleaning, normalization
+- data_loader.py     → Parses candidates JSON/JSONL/GZ/CSV
+- job_description.py → Parses job description metadata
 - embeddings.py      → Sentence-BERT + FAISS index
 - features.py        → 15-feature extraction for XGBoost
 - synthetic_labels.py→ Generates training labels
 - ranker.py          → XGBoost train/predict
-- llm_reranker.py    → GroqReranker class (Stage 3)
+- reasoning_generator.py → Generates deterministic candidate reasoning
 
 USER PREFERENCES:
 - Wants free models only (no paid APIs)
-- GROQ API key must NEVER be hardcoded — always .env
 - Cache must be persistent across script runs
-- On ANY error (API, JSON, validation), return None — NEVER crash
-- Wants step-by-step guidance, not one-shot solutions
-- Prefers chunked prompts over massive single prompts
+- On ANY error, return None — NEVER crash
 - Windows/PowerShell environment
 
 === END CONTEXT ===

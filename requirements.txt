@@ -4,7 +4,7 @@ scikit-learn==1.9.0
 xgboost==3.2.0
 sentence-transformers==5.5.1
 faiss-cpu==1.14.2
-groq==1.4.0
+# groq removed (no network calls permitted)
 PyPDF2==3.0.1
 pdfplumber==0.11.9
 pathlib==1.0.1

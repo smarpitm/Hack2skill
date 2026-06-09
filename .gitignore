@@ -97,7 +97,7 @@ Thumbs.db
 desktop.ini
 
 data/
-[PUB]*/
+\[PUB\]*/
 *.jsonl
 *.csv
 *.faiss
@@ -105,4 +105,5 @@ data/
 models/
 cache/
 submissions/
+.pytest_cache/
 

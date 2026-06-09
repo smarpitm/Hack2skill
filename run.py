@@ -53,7 +53,12 @@ def main():
     config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     data_path = Path(args.data_path)
-    candidates_csv = str(data_path / "candidates.csv")
+    if (data_path / "candidates.jsonl").exists():
+        candidates_csv = str(data_path / "candidates.jsonl")
+    elif (data_path / "candidates.jsonl.gz").exists():
+        candidates_csv = str(data_path / "candidates.jsonl.gz")
+    else:
+        candidates_csv = str(data_path / "candidates.csv")
     jobs_csv = str(data_path / "jobs.csv")
     faiss_index_file = config.MODELS_DIR / "candidates.index"
     xgb_model_file = config.MODELS_DIR / "xgb_ranker.json"

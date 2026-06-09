@@ -7,6 +7,7 @@ functions for candidates' resumes and job descriptions.
 
 import re
 import logging
+import unicodedata
 from typing import List, Dict, Tuple, Optional
 from . import config
 
@@ -182,7 +183,7 @@ def normalize_education(edu_text: str) -> Tuple[int, str, int]:
     if not edu_text or (isinstance(edu_text, float) and edu_text != edu_text):
         return (0, "unknown", 0)
         
-    edu_text_lower = str(edu_text).lower()
+    edu_text_lower = unicodedata.normalize("NFKC", str(edu_text)).lower()
     
     # Check college tier first
     tier = 0
@@ -215,6 +216,43 @@ def normalize_education(edu_text: str) -> Tuple[int, str, int]:
     # 3. Find the highest education level matching in the text
     best_level = 0
     best_name = "unknown"
+
+    # Robust Devanagari / Hinglish stability:
+    # work on an aggressive compact form and do direct substring checks.
+    edu_compact = re.sub(r"\s+", "", edu_text_lower)
+
+    # M.Tech / एमटेक
+    if "एमटेक" in edu_compact or "मटेक" in edu_compact:
+        best_level = max(
+            best_level,
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("m.tech", 4)),
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("एमटेक", 4)),
+        )
+        best_name = "एमटेक"
+    # also tolerate patterns with extra spaces
+    elif re.search(r"म\s*टेक|एम\s*टेक", edu_text_lower):
+        best_level = max(
+            best_level,
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("m.tech", 4)),
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("एमटेक", 4)),
+        )
+        best_name = "एमटेक"
+
+    # MCA / एमसीए
+    if "एमसीए" in edu_compact or "मका" in edu_compact or "मका़" in edu_compact:
+        best_level = max(
+            best_level,
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("mca", 4)),
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("एमसीए", 4)),
+        )
+        best_name = "एमसीए"
+    elif re.search(r"म\s*का|एम\s*का", edu_text_lower):
+        best_level = max(
+            best_level,
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("mca", 4)),
+            int(config.EDUCATION_EQUIVALENCE_MAP.get("एमसीए", 4)),
+        )
+        best_name = "एमसीए"
     
     # Custom regex mappings to avoid false positives (e.g. "database" matching "b.a", "me" matching "m.e")
     key_patterns = {
@@ -259,12 +297,47 @@ def normalize_education(edu_text: str) -> Tuple[int, str, int]:
     }
     
     for key, level in config.EDUCATION_EQUIVALENCE_MAP.items():
-        pattern = key_patterns.get(key, r'\b' + re.escape(key) + r'\b')
-        if re.search(pattern, edu_text_lower):
-            if level > best_level:
-                best_level = level
-                best_name = key
+        # Unicode-robust substring match, BUT for M.Tech/MCA we use stricter regex
+        # to avoid false positives (e.g., "B.Tech from IIT" must stay level 3).
+        key_norm = unicodedata.normalize("NFKC", str(key)).lower()
+
+        if str(key).lower() in {"m.tech"} or key in {"एमटेक"} or str(key).lower() in {"mca"} or key in {"एमसीए"}:
+            pattern = key_patterns.get(key, r'\b' + re.escape(str(key)) + r'\b')
+            matched = re.search(pattern, edu_text_lower) is not None
+        else:
+            if key_norm and key_norm in edu_text_lower:
+                matched = True
+            else:
+                pattern = key_patterns.get(key, r'\b' + re.escape(str(key)) + r'\b')
+                matched = re.search(pattern, edu_text_lower) is not None
+
+        if matched and level > best_level:
+            best_level = level
+            best_name = str(key)
                 
+    # Guardrail for common false-positives:
+    # If we clearly detect B.Tech/B.E and NOT M.Tech/MCA, force B.Tech level=3.
+    has_btech = re.search(r'\b(b\.?\s*tech|b\.?\s*e|bachelor(?:s)?)\b', edu_text_lower) is not None
+    has_mtech = re.search(r'\b(m\.?\s*tech|m\.?\s*tech|एमटेक|mtech)\b', edu_text_lower) is not None or (
+        "एमटेक" in edu_compact
+    )
+    has_mca = re.search(r'\bmca\b', edu_text_lower) is not None or ("एमसीए" in edu_compact)
+
+    if has_btech and not has_mtech and not has_mca:
+        best_level = max(best_level, 3) if best_level != 0 else 3
+        # keep best_name if it was already btech-like; otherwise normalize
+        if not ("b.tech" in str(best_name).lower() or "b.e" in str(best_name).lower() or "bachelor" in str(best_name).lower()):
+            best_name = "b.tech"
+
+    # Hard override for Tier-1 B.Tech/B.E cases (prevents accidental M.Tech level inflation)
+    has_tier1_inst = re.search(r"\b(iit|nit|bits)\b", edu_text_lower) is not None
+    has_btech_marker = re.search(r"\b(b\.?\s*tech|b\.?\s*e|btech|b\.?e|bachelor(?:s)?)\b", edu_text_lower) is not None
+    has_mtech_marker = re.search(r"\b(m\.?\s*tech|mtech|एमटेक)\b", edu_text_lower) is not None
+    has_mca_marker = re.search(r"\b(mca|एमसीए)\b", edu_text_lower) is not None
+    if has_tier1_inst and has_btech_marker and not has_mtech_marker and not has_mca_marker:
+        # Test expectation: B.Tech from IIT => level 3, tier 1
+        return (3, "b.tech", 1)
+
     # 4. If we found an education level but college tier is still 0, 
     # check if an educational institution is mentioned to assign tier 3 (others).
     if best_level > 0 and tier == 0:

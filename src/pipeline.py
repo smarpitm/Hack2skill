@@ -21,7 +21,9 @@ from . import embeddings
 from . import features
 from . import synthetic_labels
 from . import ranker
-from .llm_reranker import GroqReranker
+from . import data_loader
+from . import job_description
+from . import reasoning_generator
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +36,13 @@ _XGB_MODEL_PATH = config.MODELS_DIR / "xgb_ranker.json"
 _SYNTHETIC_DATA_PATH = config.DATA_DIR / "synthetic_train.csv"
 
 # Default data file names
-_DEFAULT_CANDIDATES_FILE = config.DATA_DIR / "candidates.csv"
+if (config.DATA_DIR / "candidates.jsonl").exists():
+    _DEFAULT_CANDIDATES_FILE = config.DATA_DIR / "candidates.jsonl"
+elif (config.DATA_DIR / "candidates.jsonl.gz").exists():
+    _DEFAULT_CANDIDATES_FILE = config.DATA_DIR / "candidates.jsonl.gz"
+else:
+    _DEFAULT_CANDIDATES_FILE = config.DATA_DIR / "candidates.csv"
+
 _DEFAULT_JOBS_FILE = config.DATA_DIR / "jobs.csv"
 _DEFAULT_SUBMISSION_FILE = config.SUBMISSIONS_DIR / "submission.csv"
 
@@ -65,139 +73,15 @@ class CandidateRankingPipeline:
         # Stage 2 attributes
         self._ranker = None  # xgb.Booster
 
-        # Stage 3 attributes
-        self._reranker: Optional[GroqReranker] = None
-
         # State flags
         self.index_built: bool = False
         self.ranker_trained: bool = False
 
     def load_candidates_dataframe(self, path: str) -> pd.DataFrame:
         """
-        Load candidates data from CSV, JSONL, or JSONL.GZ file.
-        Parses and flattens JSON fields to match the expected DataFrame schema.
-        Also supports JSON files containing a list of candidate dicts.
+        Load candidates data using data_loader.
         """
-        path_obj = Path(path)
-        if not path_obj.exists():
-            raise FileNotFoundError(f"Candidate data file not found at: {path}")
-
-        if path_obj.suffix.lower() == ".csv":
-            logger.info(f"Reading candidates CSV: {path_obj}")
-            return pd.read_csv(str(path_obj))
-
-        logger.info(f"Parsing candidates JSON/JSONL: {path_obj}")
-        
-        # Helper function to detect honeypot candidate on the fly
-        def is_honeypot_candidate(cand_dict):
-            skills = cand_dict.get("skills", [])
-            expert_zero_duration_count = 0
-            for s in skills:
-                prof = str(s.get("proficiency", "")).lower()
-                dur = s.get("duration_months", 0)
-                if prof in ("expert", "advanced") and dur == 0:
-                    expert_zero_duration_count += 1
-                    
-            history = cand_dict.get("career_history", [])
-            recent_startups = {"krutrim", "sarvam ai"}
-            foundation_anomaly = False
-            for job in history:
-                comp = str(job.get("company", "")).lower()
-                start = job.get("start_date")
-                duration = job.get("duration_months", 0)
-                
-                if comp in recent_startups:
-                    if start:
-                        try:
-                            start_year = int(start.split("-")[0])
-                            if start_year < 2023 or duration > 36:
-                                foundation_anomaly = True
-                        except Exception:
-                            continue
-            return expert_zero_duration_count >= 3 or foundation_anomaly
-
-        records = []
-        candidates_list = None
-
-        # Read JSON file directly if it's a JSON array
-        if path_obj.suffix.lower() == ".json":
-            with open(str(path_obj), "r", encoding="utf-8") as f:
-                candidates_list = json.load(f)
-                if isinstance(candidates_list, dict):
-                    candidates_list = [candidates_list]
-
-        if candidates_list is None:
-            # Read JSONL or JSONL.GZ line-by-line
-            is_gz = path_obj.suffix.lower() == ".gz" or path_obj.name.lower().endswith(".jsonl.gz")
-            open_func = gzip.open if is_gz else open
-            mode = "rt" if is_gz else "r"
-            candidates_list = []
-            with open_func(str(path_obj), mode, encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    candidates_list.append(json.loads(line))
-
-        for cand in candidates_list:
-            profile = cand.get("profile", {})
-            candidate_id = cand.get("candidate_id")
-            headline = profile.get("headline", "")
-            summary = profile.get("summary", "")
-            location = profile.get("location", "")
-            country = profile.get("country", "")
-            years_exp = profile.get("years_of_experience", 0.0)
-            current_title = profile.get("current_title", "")
-            current_company = profile.get("current_company", "")
-            
-            skill_list = [s.get("name", "") for s in cand.get("skills", [])]
-            skills_str = ", ".join(skill_list)
-            
-            edu_list = cand.get("education", [])
-            edu_parts = []
-            for edu in edu_list:
-                edu_parts.append(f"{edu.get('degree', '')} from {edu.get('institution', '')} (tier: {edu.get('tier', 'unknown')})")
-            edu_str = "; ".join(edu_parts) if edu_parts else "None"
-            
-            # Recreate resume_text matching clean_dataset.py exactly
-            resume_parts = [
-                f"Name: {profile.get('anonymized_name', '')}",
-                f"Headline: {headline}",
-                f"Summary: {summary}",
-                f"Current Position: {current_title} at {current_company}",
-                f"Location: {location}, {country}",
-                f"Education: {edu_str}"
-            ]
-            
-            history_parts = []
-            for job in cand.get("career_history", []):
-                history_parts.append(
-                    f"Role: {job.get('title', '')} at {job.get('company', '')} "
-                    f"({job.get('duration_months', 0)} months). Description: {job.get('description', '')}"
-                )
-            if history_parts:
-                resume_parts.append("Work History: " + "; ".join(history_parts))
-                
-            resume_text = " | ".join(resume_parts)
-            
-            signals = cand.get("redrob_signals", {})
-            platform_activity = signals.get("profile_completeness_score", 0.0)
-            
-            is_hp = 1 if is_honeypot_candidate(cand) else 0
-            
-            records.append({
-                "candidate_id": candidate_id,
-                "resume_text": resume_text,
-                "skills": skills_str,
-                "experience_years": years_exp,
-                "education": edu_str,
-                "location": location,
-                "current_title": current_title,
-                "platform_activity_score": platform_activity,
-                "is_honeypot": is_hp
-            })
-            
-        logger.info(f"Successfully loaded {len(records)} candidates from JSON/JSONL.")
-        return pd.DataFrame(records)
+        return data_loader.load_candidates_dataframe(path)
 
     # ------------------------------------------------------------------
     # STAGE 1: Build / Load FAISS Index
@@ -275,6 +159,7 @@ class CandidateRankingPipeline:
         self,
         synthetic_data_path: Optional[str] = None,
         force_retrain: bool = False,
+        candidates_path: Optional[str] = None,
     ) -> None:
         """
         Train (or reload) the XGBoost ranking model.
@@ -287,6 +172,7 @@ class CandidateRankingPipeline:
             synthetic_data_path: Path to pre-generated training CSV.
                                  Defaults to data/synthetic_train.csv.
             force_retrain: If True, always retrains even if model exists on disk.
+            candidates_path: Path to candidates file to use for generating synthetic labels.
         """
         if self.ranker_trained and not force_retrain:
             logger.info("Ranker already trained. Skipping (use force_retrain=True to override).")
@@ -306,7 +192,8 @@ class CandidateRankingPipeline:
         if not _SYNTHETIC_DATA_PATH.exists():
             logger.info("Synthetic training data not found. Generating...")
             jobs_df = pd.read_csv(str(_DEFAULT_JOBS_FILE))
-            candidates_df = self.load_candidates_dataframe(str(_DEFAULT_CANDIDATES_FILE))
+            cand_path = candidates_path or str(_DEFAULT_CANDIDATES_FILE)
+            candidates_df = self.load_candidates_dataframe(cand_path)
             synthetic_df = synthetic_labels.generate_synthetic_labels(jobs_df, candidates_df)
             synthetic_labels.save_synthetic_data(synthetic_df, str(_SYNTHETIC_DATA_PATH))
         else:
@@ -331,24 +218,23 @@ class CandidateRankingPipeline:
         self,
         jd_row: pd.Series,
         candidates_df: pd.DataFrame,
-        use_llm: bool = True,
+        use_llm: bool = False,
         top_k: Optional[int] = None,
     ) -> pd.DataFrame:
         """
-        Run all three stages for one job description and return a ranked DataFrame.
+        Run local pipeline for one job description and return a ranked DataFrame.
 
         Stage 1: FAISS dense retrieval → Top-200 candidates
         Stage 2: XGBoost ranking on 15 features → Top top_k candidates
-        Stage 3: Groq LLM re-ranking of top LLM_K candidates (optional)
 
         Args:
             jd_row: A single job description row (pd.Series).
             candidates_df: Full candidate pool DataFrame.
-            use_llm: Whether to invoke Groq LLM Stage 3.
+            use_llm: Ignored (kept for signature compatibility).
             top_k: How many candidates to return. Defaults to config.RANKER_K.
 
         Returns:
-            pd.DataFrame with columns: job_id, candidate_id, rank, [other cols]
+            pd.DataFrame with columns: job_id, candidate_id, rank, score, reasoning
         """
         if top_k is None:
             top_k = self._cfg.RANKER_K
@@ -411,59 +297,15 @@ class CandidateRankingPipeline:
 
         retrieved_df = retrieved_df.copy()
         retrieved_df["_xgb_score"] = ranking_scores
-        retrieved_df = retrieved_df.sort_values("_xgb_score", ascending=False).reset_index(drop=True)
+        
+        # Sort by score descending and break ties deterministically using candidate_id ascending
+        retrieved_df = retrieved_df.sort_values(
+            by=["_xgb_score", "candidate_id"], 
+            ascending=[False, True]
+        ).reset_index(drop=True)
+        
         top_k_df = retrieved_df.head(top_k).copy()
-
         logger.info(f"[{job_id}] Stage 2: Ranked top {len(top_k_df)} candidates.")
-
-        # ── STAGE 3: LLM Re-Ranking ───────────────────────────────────
-        llm_k = self._cfg.LLM_K
-        if use_llm and top_k >= llm_k:
-            llm_subset = top_k_df.head(llm_k).copy()
-            remaining_df = top_k_df.iloc[llm_k:].copy()
-
-            # Lazy-init the Groq reranker (only if GROQ_API_KEY is available)
-            if self._reranker is None:
-                api_key = os.environ.get("GROQ_API_KEY")
-                if not api_key:
-                    logger.warning(
-                        f"[{job_id}] Stage 3: GROQ_API_KEY not set. Skipping LLM stage."
-                    )
-                    use_llm = False
-                else:
-                    try:
-                        self._reranker = GroqReranker(api_key=api_key)
-                    except Exception as e:
-                        logger.warning(f"[{job_id}] Stage 3: Failed to init GroqReranker: {e}. Skipping.")
-                        use_llm = False
-
-        if use_llm and top_k >= llm_k and self._reranker is not None:
-            ranked_ids = self._reranker.rerank(
-                job_description=str(jd_text),
-                candidates_df=llm_subset,
-            )
-
-            if ranked_ids is not None:
-                # Re-order llm_subset according to LLM ranking
-                id_to_row = {
-                    str(row["candidate_id"]): row
-                    for _, row in llm_subset.iterrows()
-                }
-                reordered_rows = [id_to_row[rid] for rid in ranked_ids if rid in id_to_row]
-                llm_reranked_df = pd.DataFrame(reordered_rows).reset_index(drop=True)
-                # Merge: LLM top-20 first, then remaining Stage 2 order
-                top_k_df = pd.concat(
-                    [llm_reranked_df, remaining_df], ignore_index=True
-                )
-                logger.info(f"[{job_id}] Stage 3: LLM re-ranking applied.")
-            else:
-                logger.warning(f"[{job_id}] Stage 3: LLM failed. Using Stage 2 fallback.")
-        else:
-            if not (use_llm and top_k >= llm_k):
-                logger.info(
-                    f"[{job_id}] Stage 3: Skipped "
-                    f"(use_llm={use_llm}, top_k={top_k}, llm_k={llm_k})."
-                )
 
         # ── Finalise Output ───────────────────────────────────────────
         top_k_df = top_k_df.reset_index(drop=True)
@@ -475,27 +317,11 @@ class CandidateRankingPipeline:
             lambda r: round(1.0 - (r["rank"] - 1) / len(top_k_df), 4), axis=1
         )
 
-        # Generate reasoning if not already populated (e.g. by Stage 3 LLM)
-        def get_reasoning(row):
-            if "reasoning" in row and pd.notna(row["reasoning"]) and str(row["reasoning"]).strip() != "":
-                return str(row["reasoning"])
-            
-            title = row.get("current_title", "Software Engineer")
-            if not title or str(title).lower() == "unknown":
-                title = "AI Engineer"
-            exp = row.get("experience_years", 0)
-            skills = str(row.get("skills", ""))
-            loc = row.get("location", "unknown")
-            
-            match_desc = f"{title} with {exp} years of experience."
-            if pd.notna(skills) and skills.strip() != "":
-                skills_list = [s.strip() for s in skills.split(",") if s.strip()]
-                if skills_list:
-                    match_desc += f" Skilled in {', '.join(skills_list[:3])}."
-            match_desc += f" Location: {loc}."
-            return match_desc
-
-        top_k_df["reasoning"] = top_k_df.apply(get_reasoning, axis=1)
+        # Generate reasoning using the reasoning_generator module
+        top_k_df["reasoning"] = top_k_df.apply(
+            lambda r: reasoning_generator.generate_candidate_reasoning(r, jd_row, r["rank"]),
+            axis=1
+        )
 
         # Drop internal scoring column if present
         if "_xgb_score" in top_k_df.columns:
@@ -680,11 +506,21 @@ class CandidateRankingPipeline:
                 rank = None
             else:
                 try:
-                    rank_f = float(raw_rank)
-                    if not rank_f.is_integer():
-                        raise ValueError
-                    rank = int(rank_f)
-                    
+                    rank_s = str(raw_rank).strip()
+
+                    if strict:
+                        # Match PUB validate_submission.py exactly:
+                        # - rank must parse as int(rank_s)
+                        # - and str(rank) must equal rank_s (reject "1.0", "01", etc.)
+                        rank = int(rank_s)
+                        if str(rank) != rank_s:
+                            raise ValueError
+                    else:
+                        rank_f = float(raw_rank)
+                        if not rank_f.is_integer():
+                            raise ValueError
+                        rank = int(rank_f)
+
                     max_rank = 100 if strict else n
                     if not 1 <= rank <= max_rank:
                         errors.append(f"Row {row_num}: rank must be between 1 and {max_rank}.")

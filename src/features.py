@@ -542,6 +542,13 @@ def extract_all_features(
     edu_match = compute_education_match(jd_edu_level, res_edu_level, res_tier, plat_act)
     loc_match = compute_location_match(jd_location, candidate_location)
     sem_sim = compute_semantic_similarity(faiss_score)
+    
+    # Apply honeypot penalty if candidate is flagged
+    is_hp = candidate_row.get("is_honeypot", 0)
+    if is_hp == 1:
+        sem_sim = max(0.0, sem_sim - config.HONEYPOT_PENALTY)
+        plat_act = max(0.0, plat_act - config.HONEYPOT_PENALTY)
+        
     career_prog = compute_career_progression(candidate_title, candidate_exp)
     
     # Update candidate_row to contain parsed details for completeness check
