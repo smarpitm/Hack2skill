@@ -1,139 +1,265 @@
-# AI Candidate Ranking System for India Runs Hackathon
+# 🤖 AI Candidate Ranking System — India Runs Hackathon
 
-This repository contains the full source code for the **AI Candidate Ranking System**, developed for **Track 1: The Data & AI Challenge** of the India Runs Hackathon (Prize: 10 Lakhs).
+> **Track 1: The Data & AI Challenge** · Prize: ₹10 Lakhs  
+> **Team:** Smarpit — AI Ranker · **Contact:** smarpitmalik@gmail.com
 
-The system uses a **2-Stage Local Retrieval and Ranking Pipeline** designed to handle 50,000+ candidates under strict performance limitations (<6 seconds per job, <4GB RAM) using **zero network / external API calls** (running completely locally).
+A production-grade **2-Stage Local Retrieval & Ranking Pipeline** that identifies the top 100 candidates from a 50,000+ candidate pool — with **zero network calls**, under **6 seconds per job**, and within **4 GB RAM**.
 
 ---
 
-## 2-Stage Local Architecture
+## 📐 Architecture
 
 ```
-           +-----------------------------------------+
-           |       Candidates Pool (50k Resumes)     |
-           +-----------------------------------------+
-                                |
-                                v
-       +---------------------------------------------------+
-       | Stage 1: Dense Retrieval (Sentence-BERT + FAISS)  |
-       |          Retrieves top 200 candidates per job     |
-       +---------------------------------------------------+
-                                |
-                                v
-       +---------------------------------------------------+
-       | Stage 2: XGBoost Ranker (15-feature model)        |
-       |          Ranks and selects top 100 candidates     |
-       +---------------------------------------------------+
-                                |
-                                v
-           +-----------------------------------------+
-           |       submission.csv (Final Rankings)   |
-           +-----------------------------------------+
+            ┌─────────────────────────────────────────────┐
+            │       Candidates Pool  (50k+ Resumes)       │
+            └─────────────────────┬───────────────────────┘
+                                  │
+                                  ▼
+        ┌─────────────────────────────────────────────────┐
+        │  Stage 1 — Dense Retrieval                      │
+        │  Sentence-BERT (all-MiniLM-L6-v2) + FAISS      │
+        │  Retrieves top 200 candidates per job           │
+        └─────────────────────────┬───────────────────────┘
+                                  │
+                                  ▼
+        ┌─────────────────────────────────────────────────┐
+        │  Stage 2 — XGBoost Pairwise Ranker              │
+        │  15-feature model trained on synthetic labels    │
+        │  Ranks and selects top 100 candidates           │
+        └─────────────────────────┬───────────────────────┘
+                                  │
+                                  ▼
+            ┌─────────────────────────────────────────────┐
+            │  submission.csv / submission.xlsx            │
+            │  (candidate_id, rank, score, reasoning)     │
+            └─────────────────────────────────────────────┘
 ```
 
 ### Fallback Chain
-- **Stage 1 (FAISS)** fails -> Falls back to standard **TF-IDF Dense/Sparse Retrieval**.
-- **Stage 2 (XGBoost)** fails -> Falls back to **Weighted Heuristic Scoring** (Platform Activity, Experience Match, Skill Match, Education Match).
+
+| Stage | Primary | Fallback |
+|-------|---------|----------|
+| Stage 1 (Retrieval) | Sentence-BERT + FAISS dense retrieval | TF-IDF sparse retrieval |
+| Stage 2 (Ranking) | XGBoost pairwise ranker | Weighted heuristic scoring (Platform Activity, Experience, Skills, Education) |
 
 ---
 
-## One-Command Setup
+## 🚀 Quick Start
 
-Install dependencies:
+### 1. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
----
+### 2. Run the Pipeline
 
-## Getting Started (Hackathon Participant Bundle)
-
-### 1) Read the official docs (recommended order)
-Use the files from:
-`[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/`
-- `job_description.txt`
-- `submission_spec.txt`
-- `redrob_signals_doc.txt`
-- `candidate_schema.json`
-
-### 2) Prepare the candidate pool
-The official bundle provides `candidates.jsonl.gz` (100,000 candidates).
-
-Option A (unpack locally):
 ```bash
-gunzip -k candidates.jsonl.gz
-# creates candidates.jsonl (100000 lines)
+# Primary entry point (JSONL / JSONL.GZ / CSV supported)
+python rank.py --candidates ./candidates.jsonl.gz --out ./output/submission.csv
+
+# Alternative entry point (data directory mode)
+python run.py --data_path ./data --output ./output/submission.csv
 ```
 
-Option B (load gz directly in Python):
-```python
-import gzip, json
-with gzip.open("candidates.jsonl.gz","rt",encoding="utf-8") as f:
-    candidates = [json.loads(line) for line in f if line.strip()]
-print(len(candidates))
+### 3. CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--candidates` | *required* | Path to candidates file (`.jsonl`, `.jsonl.gz`, `.json`, `.csv`) |
+| `--out` | *required* | Output path for the ranked CSV |
+| `--jobs` | `data/jobs.csv` | Path to jobs CSV |
+| `--no_llm` | `false` | Disable Stage 3 LLM re-ranking |
+| `--build_index` | `false` | Force rebuild of FAISS index |
+| `--train_ranker` | `false` | Force retrain of XGBoost model |
+
+---
+
+## 📁 Project Structure
+
+```
+hackathonpresent/
+├── rank.py                    # CLI entry point (primary)
+├── run.py                     # CLI entry point (data-directory mode)
+├── requirements.txt           # Python dependencies
+├── submission_metadata.yaml   # Hackathon submission metadata
+├── context.txt                # Job description context
+├── pytest.ini                 # Test configuration
+│
+├── src/                       # Core pipeline modules
+│   ├── config.py              # Paths, hyperparameters, skill/education/location maps
+│   ├── pipeline.py            # End-to-end orchestrator (Stage 1 → Stage 2)
+│   ├── embeddings.py          # Sentence-BERT encoding + FAISS index build/load/query
+│   ├── features.py            # 15-feature extraction engine
+│   ├── ranker.py              # XGBoost training, loading, and prediction
+│   ├── synthetic_labels.py    # Synthetic training data generation
+│   ├── preprocessing.py       # Text cleaning, skill aliasing, education/location normalization
+│   ├── data_loader.py         # Multi-format candidate data loading
+│   ├── job_description.py     # JD parsing utilities
+│   └── reasoning_generator.py # Human-readable reasoning text per candidate
+│
+├── tests/                     # Comprehensive test suite
+│   ├── conftest.py            # Shared fixtures
+│   ├── test_config.py         # Config sanity checks
+│   ├── test_features.py       # Feature extraction unit tests
+│   ├── test_preprocessing.py  # Text processing unit tests
+│   ├── test_ranker.py         # XGBoost ranker tests
+│   ├── test_synthetic_labels.py # Synthetic data generation tests
+│   ├── test_pipeline.py       # Pipeline integration tests
+│   ├── test_hardening.py      # Edge-case & robustness tests
+│   └── test_e2e.py            # End-to-end tests
+│
+├── data/                      # Input data (candidates, jobs, synthetic training)
+├── models/                    # Persisted artefacts (FAISS index, XGBoost model)
+├── output/                    # Pipeline outputs
+│   ├── submission.csv         # Final ranked CSV
+│   └── submission.xlsx        # Spreadsheet version
+└── cache/                     # Intermediate caches
 ```
 
-### 3) Build your ranker (produce `top 100` + reasoning)
-Run this repo’s pipeline to generate a submission CSV.
+---
 
-> Output CSV must contain **exactly** these columns (header order matters):  
-`candidate_id,rank,score,reasoning`
+## 🧠 The 15-Feature Model
 
-Example (JSONL/GZ/CSV supported for candidates):
+The XGBoost ranker is trained on **15 engineered features** that capture multi-dimensional candidate–job fit:
+
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | **Skill Match Count** | Number of JD-required skills found in resume (alias-aware) |
+| 2 | **Skill Match Ratio** | Fraction of JD skills matched |
+| 3 | **Candidate Experience** | Parsed years of experience (with resume-text fallback) |
+| 4 | **Experience Match** | Step-function score comparing candidate vs required experience |
+| 5 | **Education Match** | Education level comparison with college-tier and activity bonuses |
+| 6 | **Location Match** | Geo proximity (exact city → metro region → national → international) |
+| 7 | **Semantic Similarity** | FAISS cosine similarity from Sentence-BERT embeddings |
+| 8 | **Platform Activity** | Normalized engagement score (0–1) |
+| 9 | **Resume Completeness** | Fraction of key profile fields filled |
+| 10 | **Career Progression** | Title seniority × experience years |
+| 11 | **Resume Length** | Word count of resume text |
+| 12 | **Keyword Density** | Non-stopword JD term overlap ratio |
+| 13 | **Section Completeness** | Presence of standard resume sections |
+| 14 | **Project Diversity** | Count of distinct project domains mentioned |
+| 15 | **Title Match** | Lexical overlap between JD title and candidate's current title |
+
+### Synthetic Training Data
+
+Training labels are generated synthetically using a weighted composite score:
+
+| Weight | Signal |
+|--------|--------|
+| 0.35 | Skill Match |
+| 0.30 | Semantic Similarity |
+| 0.20 | Experience Match |
+| 0.15 | Platform Activity |
+
+---
+
+## 🇮🇳 India-Specific Handling
+
+- **Hinglish Education Degrees**: Recognizes Hindi-script degree names (बीटेक, एमटेक, पीएचडी) alongside English equivalents
+- **Indian City Normalization**: Maps 30+ Indian city aliases (Bengaluru↔Bangalore, Bombay↔Mumbai, Gurugram↔Gurgaon, etc.)
+- **NCR Metro Region**: Delhi, Gurgaon, and Noida treated as same metro for location scoring
+- **College Tiers**: IIT/NIT/BITS (Tier 1), VIT/SRM/Manipal (Tier 2) with score bonuses
+- **Tier-2/3 Activity Bonus**: High-activity candidates from non-Tier-1 colleges get a +0.05 boost
+- **Consulting vs Product Company Detection**: Identifies company backgrounds (TCS, Infosys vs Swiggy, Razorpay)
+- **Honeypot Filtering**: Detects and filters honeypot candidates to ensure zero honeypot rate
+
+---
+
+## 📊 Output Format
+
+### CSV (`submission.csv`)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `candidate_id` | string | `CAND_XXXXXXX` format identifier |
+| `rank` | integer | 1–100 (1 = best fit) |
+| `score` | float | Monotonically non-increasing similarity score |
+| `reasoning` | string | Human-readable suitability explanation |
+
+### Excel (`submission.xlsx`)
+
+Same data as above, exported as an Excel spreadsheet for easy viewing and sharing.
+
+---
+
+## 🧪 Testing
+
+Run the full test suite:
+
 ```bash
-python rank.py --candidates ./candidates.jsonl.gz --out ./submission.csv
+pytest tests/ -v
 ```
 
-If your dataset uses `candidates.csv` + `jobs.csv` in a directory:
+| Test File | Coverage |
+|-----------|----------|
+| `test_config.py` | Config constants, weight invariants, path existence |
+| `test_features.py` | All 15 feature extraction functions |
+| `test_preprocessing.py` | Text cleaning, skill aliasing, education/location normalization |
+| `test_ranker.py` | XGBoost train/predict/save/load cycle |
+| `test_synthetic_labels.py` | Synthetic label generation and thresholds |
+| `test_pipeline.py` | Pipeline integration (index build → rank → validate) |
+| `test_hardening.py` | Edge cases, missing data, malformed inputs |
+| `test_e2e.py` | End-to-end ranking pipeline |
+
+---
+
+## ⚡ Performance & Constraints
+
+| Metric | Target | Achieved |
+|--------|--------|----------|
+| Execution speed | < 6 sec / job | ✅ |
+| RAM usage | < 4 GB | ✅ |
+| Candidate scale | 50,000+ | ✅ |
+| Network calls during ranking | 0 | ✅ |
+| GPU required | No | ✅ (CPU-only) |
+
+---
+
+## 🔧 Dependencies
+
+```
+pandas==3.0.3
+numpy==2.4.6
+scikit-learn==1.9.0
+xgboost==3.2.0
+sentence-transformers==5.5.1
+faiss-cpu==1.14.2
+PyPDF2==3.0.1
+pdfplumber==0.11.9
+python-dotenv==1.2.2
+pytest==9.0.3
+```
+
+---
+
+## 🛠 Troubleshooting
+
+### FAISS Installation Errors
+On Windows, if `faiss-cpu` fails to build, ensure the **Microsoft Visual C++ Redistributable** is installed. Alternatively, install inside a Conda environment:
 ```bash
-python run.py --data_path ./data --output ./submission.csv
+conda install -c conda-forge faiss-cpu
+```
+
+### CUDA / GPU Out of Memory
+The pipeline runs on **CPU by default**. Force CPU mode if GPU VRAM is insufficient:
+```bash
+CUDA_VISIBLE_DEVICES="" python rank.py --candidates ./candidates.jsonl.gz --out ./submission.csv
+```
+
+### openpyxl for Excel Export
+To generate `.xlsx` output, install openpyxl:
+```bash
+pip install openpyxl
 ```
 
 ---
 
-## Data Formats
+## 📜 License
 
-### Expected Input Format
+Built for the India Runs Hackathon by **Smarpit**. All code is original work.
 
-The pipeline expects two files in the input directory (`./data`):
-1. **`jobs.csv`**: Contains job descriptions.
-   - `job_id`: Unique identifier for the job.
-   - `title`: Job title.
-   - `description`: Detailed job description including required skills, education, and experience.
-   
-2. **`candidates.csv`** (or `candidates.jsonl` / `candidates.jsonl.gz`): Contains candidate resumes.
-   - `candidate_id`: Unique identifier for the candidate.
-   - `resume_text`: Full text content of the candidate's resume.
-   - `education`: (Optional) College/degree details.
-   - `experience`: (Optional) Raw experience years or details.
-   - `location`: (Optional) City or state of residence.
-   - `platform_activity`: (Optional) Activity score (0.0 to 1.0) on the hosting site.
+## 🔗 Links
 
-### Expected Output Format
-
-The output file **`<registered_participant_id>.csv`** (e.g. `team_xxx.csv` or `submission.csv`) must contain the final sorted ranks in exactly 100 data rows:
-- `candidate_id`: The identifier of the ranked candidate (matching `CAND_XXXXXXX` format).
-- `rank`: Contiguous rank number from 1 to 100 (where 1 is the best-fit candidate).
-- `score`: Monotonically non-increasing similarity score (float).
-- `reasoning`: A text reason summarizing the candidate suitability.
-
-The CSV must contain exactly 100 data rows following a 1-row header.
-
----
-
-## Performance and Constraints
-
-- **Execution Speed**: Less than 6 seconds per job description.
-- **Resource Constraints**: Consumes less than 4GB RAM, suitable for local development/deployment.
-- **Scale**: Handles databases with 50,000+ candidates efficiently via Stage 1 filtering.
-- **Local First**: Sentence-BERT embeddings, FAISS indices, and XGBoost models are run completely offline with no network dependencies.
-
----
-
-## Troubleshooting
-
-- **FAISS Installation Errors**:
-  - On Windows, if `faiss-cpu` fails to build, make sure you have the Microsoft Visual C++ Redistributable installed. Alternatively, run `pip install faiss-cpu` in a Conda environment.
-  
-- **CUDA/GPU Out of Memory**:
-  - The pipeline runs on CPU by default to maintain the `<4GB RAM` constraint. Force CPU mode by setting `CUDA_VISIBLE_DEVICES=""` if your GPU runs out of VRAM.
+- **GitHub**: [github.com/smarpitm/Hack2skill](https://github.com/smarpitm/Hack2skill)
+- **Sandbox**: [huggingface.co/spaces/smarpitm/redrob-ranker](https://huggingface.co/spaces/smarpitm/redrob-ranker)
